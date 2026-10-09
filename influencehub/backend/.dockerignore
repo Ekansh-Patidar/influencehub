@@ -1,0 +1,8 @@
+# Keep the build context small and never ship local secrets into the image
+target/
+.mvn/wrapper/maven-wrapper.jar
+.idea/
+.vscode/
+*.iml
+secrets.properties
+cloudrun.env.yaml

@@ -31,3 +31,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local secrets (see secrets.properties.example) ###
+secrets.properties
+cloudrun.env.yaml

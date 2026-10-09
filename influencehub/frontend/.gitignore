@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Firebase CLI cache / per-machine project alias
+.firebase/
+.firebaserc

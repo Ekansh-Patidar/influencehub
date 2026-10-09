@@ -108,6 +108,22 @@ nano backend/cloudrun.env.yaml
   These are Firebase Hosting's default URLs. If the Firebase console later shows a different site name,
   update this value (see step 8).
 
+## 5b. Let the build service account build from source
+
+New projects don't automatically give the default compute service account broad permissions. Without
+this step the first deploy fails with
+`… does not have storage.objects.get access … run-sources-<project>-<region>`.
+
+```bash
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+  --role="roles/run.builder"
+```
+Wait 1–2 minutes for the permission to take effect. If a permission error persists, grant
+`roles/storage.objectViewer`, `roles/artifactregistry.writer` and `roles/logging.logWriter` the same way.
+This account now both builds and runs the service. That's fine for a personal project; production
+setups use a separate build service account.
+
 ## 6. Run the tests, then deploy the backend to Cloud Run
 
 Run the NFR test suite before every deploy. `./mvnw test` runs the 18 deterministic tests and
@@ -115,6 +131,10 @@ leaves out the machine-dependent latency test (PERF-2, tagged `load`), so it giv
 on a laptop, in Cloud Shell or in CI. The Docker build skips tests entirely.
 
 ```bash
+# Pre-flight: no template placeholders left (must print nothing), password secret has the real length
+grep -n "YOUR_" backend/cloudrun.env.yaml
+gcloud secrets versions access latest --secret=db-password | wc -c   # 22 = placeholder still stored!
+
 (cd backend && ./mvnw -B test)    # expect: Tests run: 18, Failures: 0 -> BUILD SUCCESS
 
 gcloud run deploy influencehub-api \

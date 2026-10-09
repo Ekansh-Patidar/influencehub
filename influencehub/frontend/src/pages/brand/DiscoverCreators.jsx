@@ -9,13 +9,18 @@ import TagPill from '../../components/ui/TagPill'
 import Textarea from '../../components/ui/Textarea'
 import Modal from '../../components/ui/Modal'
 import EmptyState from '../../components/ui/EmptyState'
+import Pagination from '../../components/ui/Pagination'
 import { Skeleton } from '../../components/ui/Skeleton'
 import { useToast } from '../../store/toastStore'
 import { useAuthStore } from '../../store/authStore'
 import client from '../../api/client'
 
+const PAGE_SIZE = 12
+
 export default function DiscoverCreators() {
   const [results, setResults] = useState([])
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   // Map of creatorUserId → request status ('pending'|'accepted'|'rejected'|null)
   const [statusMap, setStatusMap] = useState({})
@@ -31,10 +36,12 @@ export default function DiscoverCreators() {
 
   const loadCreators = useCallback(() => {
     setLoading(true)
-    client.get('/api/creators')
+    // Server-side pagination: the backend returns PAGE_SIZE creators per page plus the total count
+    client.get('/api/creators', { params: { page, size: PAGE_SIZE } })
       .then(res => {
         const creators = res.data.creators || []
         setResults(creators)
+        setTotal(res.data.total || 0)
         // Build statusMap from the per-creator requestStatus returned by backend
         const map = {}
         creators.forEach(c => {
@@ -44,7 +51,7 @@ export default function DiscoverCreators() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }, [page])
 
   useEffect(() => { loadCreators() }, [loadCreators])
 
@@ -124,7 +131,7 @@ export default function DiscoverCreators() {
       <div>
         <div className="flex justify-between items-center mb-[16px]">
           <h3 className="text-[16px] font-semibold text-[#1C1C1C]">
-            All Creators {!loading && `(${results.length})`}
+            All Creators {!loading && `(${total})`}
           </h3>
         </div>
 
@@ -163,6 +170,10 @@ export default function DiscoverCreators() {
               </Card>
             ))}
           </div>
+        )}
+        {total > PAGE_SIZE && (
+          <Pagination currentPage={page} totalPages={Math.ceil(total / PAGE_SIZE)}
+            onPageChange={(p) => { setPage(p); window.scrollTo(0, 0) }} />
         )}
       </div>
 

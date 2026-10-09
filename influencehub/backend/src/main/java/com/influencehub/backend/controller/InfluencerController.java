@@ -5,13 +5,15 @@ import com.influencehub.backend.dto.CreatorListResponse;
 import com.influencehub.backend.influencer.model.InfluencerProfile;
 import com.influencehub.backend.influencer.repository.InfluencerProfileRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import com.influencehub.backend.repository.CollaborationRequestRepository;
 import com.influencehub.backend.repository.UserRepository;
 import com.influencehub.backend.config.JwtUtil;
 import com.influencehub.backend.model.User;
-import com.influencehub.backend.model.CollaborationRequest;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -22,6 +24,9 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/creators")
 public class InfluencerController {
+
+    static final int DEFAULT_PAGE_SIZE = 12;
+    static final int MAX_PAGE_SIZE = 50;
 
     @Autowired
     private InfluencerProfileRepository influencerRepository;
@@ -49,41 +54,39 @@ public class InfluencerController {
             @RequestParam(required = false) List<String> niches,
             @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "1") int page,
+            @RequestParam(required = false) Integer size,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         User currentUser = getCurrentUser(authHeader);
 
-        List<InfluencerProfile> profiles = (niches != null && !niches.isEmpty())
-                ? influencerRepository.findAll().stream()
-                        .filter(p -> niches.contains(p.getNiche()))
-                        .collect(Collectors.toList())
-                : influencerRepository.findAll();
+        // Filtering + paging pushed down to the database (was: findAll() then filter in Java)
+        int pageSize = size == null ? DEFAULT_PAGE_SIZE : Math.max(1, Math.min(size, MAX_PAGE_SIZE));
+        PageRequest pageable = PageRequest.of(Math.max(page, 1) - 1, pageSize, Sort.by("id"));
+        Page<InfluencerProfile> profiles = (niches != null && !niches.isEmpty())
+                ? influencerRepository.findPageByNicheIn(niches, pageable)
+                : influencerRepository.findPage(pageable);
 
         // Build a map of creatorUserId → effective collaboration status
         // We check ALL requests between this brand and each creator (from either side)
         // to determine the correct button: Message (accepted), Requested (pending), or Request/Request Again
-        Map<Long, String> requestStatusByCreatorUserId = new java.util.HashMap<>();
+        Map<Long, String> requestStatusByCreatorUserId = new HashMap<>();
         if (currentUser != null && "brand".equalsIgnoreCase(currentUser.getRole())) {
-            // Collect all requests where the brand is involved (either as brand or as the accepting party)
-            List<com.influencehub.backend.model.CollaborationRequest> allBrandRequests = requestRepository.findAllByBrand(currentUser);
-
-            allBrandRequests.stream()
-                    .filter(r -> r.getCreator() != null)
-                    .forEach(r -> {
-                        Long cid = r.getCreator().getId();
-                        String existing = requestStatusByCreatorUserId.get(cid);
-                        String newStatus = r.getStatus() != null ? r.getStatus().toLowerCase() : "pending";
-                        // Priority: accepted > pending > rejected
-                        if (existing == null || "accepted".equals(newStatus) ||
-                                ("pending".equals(newStatus) && !"accepted".equals(existing))) {
-                            requestStatusByCreatorUserId.put(cid, newStatus);
-                        }
-                    });
+            // One projection query of (creatorId, status) instead of loading full request entities
+            for (Object[] row : requestRepository.findCreatorStatusPairsForBrand(currentUser)) {
+                Long cid = (Long) row[0];
+                String existing = requestStatusByCreatorUserId.get(cid);
+                String newStatus = row[1] != null ? row[1].toString().toLowerCase() : "pending";
+                // Priority: accepted > pending > rejected
+                if (existing == null || "accepted".equals(newStatus) ||
+                        ("pending".equals(newStatus) && !"accepted".equals(existing))) {
+                    requestStatusByCreatorUserId.put(cid, newStatus);
+                }
+            }
         }
 
-        List<CreatorDTO> dtos = profiles.stream()
+        List<CreatorDTO> dtos = profiles.getContent().stream()
                 .map(p -> {
-                    CreatorDTO dto = convertToDTO(p);
+                    CreatorDTO dto = convertToSummaryDTO(p);
                     if (p.getUser() != null) {
                         String rs = requestStatusByCreatorUserId.get(p.getUser().getId());
                         if (rs != null) dto.setRequestStatus(rs);
@@ -92,27 +95,24 @@ public class InfluencerController {
                 })
                 .collect(Collectors.toList());
 
-        return ResponseEntity.ok(new CreatorListResponse(dtos, dtos.size()));
+        return ResponseEntity.ok(new CreatorListResponse(dtos, profiles.getTotalElements()));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<CreatorDTO> getCreator(
-            @PathVariable Long id, 
+            @PathVariable Long id,
             @RequestHeader(value = "Authorization", required = false) String authHeader) {
-        
+
         User currentUser = getCurrentUser(authHeader);
 
         return influencerRepository.findById(id)
                 .map(p -> {
                     CreatorDTO dto = convertToDTO(p);
                     if (currentUser != null && "brand".equalsIgnoreCase(currentUser.getRole()) && p.getUser() != null) {
-                        java.util.Optional<CollaborationRequest> req = requestRepository.findAllByBrand(currentUser).stream()
-                                .filter(r -> r.getCreator() != null && r.getCreator().getId().equals(p.getUser().getId()) 
-                                          && ("BRAND".equals(r.getInitiatedBy())))
-                                .findFirst();
-                        if (req.isPresent()) {
-                            dto.setRequestStatus(req.get().getStatus().toLowerCase());
-                        }
+                        // Targeted query (was: load every request this brand ever sent)
+                        requestRepository.findBrandInitiatedStatuses(currentUser, p.getUser().getId()).stream()
+                                .findFirst()
+                                .ifPresent(s -> dto.setRequestStatus(s.toLowerCase()));
                     }
                     return ResponseEntity.ok(dto);
                 })
@@ -121,26 +121,48 @@ public class InfluencerController {
 
     @GetMapping("/{id}/similar")
     public ResponseEntity<List<CreatorDTO>> getSimilar(@PathVariable Long id) {
-        // Mocking similar creators by returning others in the same niche
+        // Similar creators = others in the same niche (LIMIT 3 done by the database)
         return influencerRepository.findById(id)
                 .map(p -> {
-                    List<CreatorDTO> similar = influencerRepository.findAll().stream()
-                            .filter(other -> !other.getId().equals(id) && other.getNiche().equals(p.getNiche()))
-                            .limit(3)
-                            .map(this::convertToDTO)
-                            .collect(Collectors.toList());
+                    List<CreatorDTO> similar = p.getNiche() == null ? List.<CreatorDTO>of()
+                            : influencerRepository.findSimilar(p.getNiche(), id, PageRequest.of(0, 3)).stream()
+                                    .map(this::convertToSummaryDTO)
+                                    .collect(Collectors.toList());
                     return ResponseEntity.ok(similar);
                 })
                 .orElse(ResponseEntity.ok(Collections.emptyList()));
     }
 
-    private CreatorDTO convertToDTO(InfluencerProfile profile) {
+    /**
+     * Lightweight card DTO for listings: omits the base64 avatar / cover / portfolio images
+     * (tens of KB each) that the discovery grid never renders. The full profile endpoint
+     * (/api/creators/{id}) still returns them.
+     */
+    private CreatorDTO convertToSummaryDTO(InfluencerProfile profile) {
+        return CreatorDTO.builder()
+                .id(profile.getId())
+                .userId(profile.getUser() != null ? profile.getUser().getId() : null)
+                .name(profile.getUser() != null ? profile.getUser().getName() : "Unknown")
+                .handle(profile.getHandle())
+                .niche(profile.getNiche())
+                .followers(profile.getFollowerCount())
+                .location(profile.getLocation())
+                .bio(profile.getBio())
+                .website(profile.getPortfolioUrl())
+                .stats(stats(profile))
+                .build();
+    }
+
+    private static Map<String, String> stats(InfluencerProfile profile) {
         Map<String, String> stats = new HashMap<>();
         stats.put("Followers",      profile.getFollowerCount() != null ? profile.getFollowerCount() : "--");
         stats.put("EngagementRate", profile.getEngagementRate() != null ? profile.getEngagementRate() : "--");
         stats.put("PostsMonth",     profile.getPostsPerMonth() != null ? profile.getPostsPerMonth() : "--");
         stats.put("AvgReach",       profile.getAvgReach() != null ? profile.getAvgReach() : "--");
+        return stats;
+    }
 
+    private CreatorDTO convertToDTO(InfluencerProfile profile) {
         // Parse portfolio images from JSON array stored in the profile
         java.util.List<String> portfolio = new java.util.ArrayList<>();
         if (profile.getPortfolioImages() != null && !profile.getPortfolioImages().isBlank()) {
@@ -170,7 +192,7 @@ public class InfluencerController {
                 .location(profile.getLocation())
                 .bio(profile.getBio())
                 .website(profile.getPortfolioUrl())
-                .stats(stats)
+                .stats(stats(profile))
                 .portfolio(portfolio)
                 .build();
     }

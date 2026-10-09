@@ -5,6 +5,7 @@ import com.influencehub.backend.model.User;
 import com.influencehub.backend.repository.UserRepository;
 import com.influencehub.backend.brand.repository.BrandProfileRepository;
 import com.influencehub.backend.influencer.repository.InfluencerProfileRepository;
+import com.influencehub.backend.service.AccountService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -30,6 +31,9 @@ public class SettingsController {
     private BCryptPasswordEncoder passwordEncoder;
 
     @Autowired
+    private AccountService accountService;
+
+    @Autowired
     private JwtUtil jwtUtil;
 
     private User getCurrentUser(String authHeader) {
@@ -43,7 +47,7 @@ public class SettingsController {
     }
 
     @PutMapping("/profile")
-    public ResponseEntity<?> updateProfile(@RequestBody Map<String, String> body, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> updateProfile(@RequestBody Map<String, String> body, @RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 
@@ -87,7 +91,7 @@ public class SettingsController {
     }
 
     @PutMapping("/password")
-    public ResponseEntity<?> updatePassword(@RequestBody Map<String, String> body, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> updatePassword(@RequestBody Map<String, String> body, @RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 
@@ -105,7 +109,7 @@ public class SettingsController {
     }
 
     @PutMapping("/notifications")
-    public ResponseEntity<?> updateNotifications(@RequestBody Map<String, Object> body, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> updateNotifications(@RequestBody Map<String, Object> body, @RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
         // Mock saving notifications preferences
@@ -113,22 +117,14 @@ public class SettingsController {
     }
 
     @DeleteMapping("/account")
-    public ResponseEntity<?> deleteAccount(@RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> deleteAccount(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 
-        // Simple delete. In a real app we'd need to cascade delete campaigns, requests, etc.
-        try {
-            if ("brand".equalsIgnoreCase(user.getRole())) {
-                brandProfileRepository.findByUserId(user.getId()).ifPresent(bp -> brandProfileRepository.delete(bp));
-            } else if ("influencer".equalsIgnoreCase(user.getRole())) {
-                influencerProfileRepository.findByUser(user).ifPresent(ip -> influencerProfileRepository.delete(ip));
-            }
-            userRepository.delete(user);
-        } catch (Exception e) {
-            // Ignore FK constraints for this prototype or do best effort
-        }
-        
+        // One transaction: user + campaigns, requests, conversations, messages, notifications.
+        // Any failure rolls everything back and surfaces as an error (never a false "deleted").
+        accountService.deleteAccount(user);
+
         return ResponseEntity.ok(Map.of("message", "Account deleted"));
     }
 }

@@ -1,6 +1,7 @@
 package com.influencehub.backend.model;
 
 import com.influencehub.backend.brand.model.Campaign;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -34,6 +35,15 @@ public class CollaborationRequest {
     private String status; // PENDING, ACCEPTED, REJECTED, COMPLETED
 
     private String initiatedBy; // INFLUENCER (applied to campaign) | BRAND (requested influencer)
+
+    /**
+     * Deduplication key, set only while the request is PENDING and cleared on accept/reject.
+     * The UNIQUE constraint makes "at most one open request per brand/creator(/campaign)" a
+     * database guarantee, so concurrent duplicate submissions cannot both be persisted.
+     */
+    @JsonIgnore
+    @Column(unique = true)
+    private String activeKey;
 
     private LocalDateTime timestamp;
 

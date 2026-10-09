@@ -23,7 +23,7 @@ public class BrandProfileServiceImpl implements BrandProfileService {
         User user = userRepo.findById(userId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        BrandProfile profile = new BrandProfile();
+        BrandProfile profile = brandRepo.findByUserId(userId).orElseGet(BrandProfile::new);
         profile.setBrandName(request.brandName);
         profile.setWebsite(request.website);
         profile.setIndustry(request.industry);

@@ -45,7 +45,7 @@ public class InfluencerProfileController {
      * Returns the logged-in influencer's profile.
      */
     @GetMapping("/profile")
-    public ResponseEntity<?> getMyProfile(@RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> getMyProfile(@RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 
@@ -76,7 +76,7 @@ public class InfluencerProfileController {
     @PutMapping("/profile")
     public ResponseEntity<?> updateMyProfile(
             @RequestBody Map<String, Object> body,
-            @RequestHeader("Authorization") String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
 
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
@@ -196,7 +196,7 @@ public class InfluencerProfileController {
     @PostMapping("/portfolio")
     public ResponseEntity<?> addPortfolioImage(
             @RequestBody Map<String, String> body,
-            @RequestHeader("Authorization") String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 
@@ -226,7 +226,7 @@ public class InfluencerProfileController {
     @DeleteMapping("/portfolio/{index}")
     public ResponseEntity<?> deletePortfolioImage(
             @PathVariable int index,
-            @RequestHeader("Authorization") String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         User user = getCurrentUser(authHeader);
         if (user == null) return ResponseEntity.status(401).body("Unauthorized");
 

@@ -19,6 +19,9 @@
 
 	<properties>
 		<java.version>17</java.version>
+		<!-- Tests tagged "load" (machine-dependent latency checks) are excluded from the default build -->
+		<test.groups></test.groups>
+		<test.excludedGroups>load</test.excludedGroups>
 	</properties>
 
 	<dependencies>
@@ -104,6 +107,16 @@
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
 
+			<!-- Tests: deterministic suite by default; load tests only via -Pload-test -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<groups>${test.groups}</groups>
+					<excludedGroups>${test.excludedGroups}</excludedGroups>
+				</configuration>
+			</plugin>
+
 			<!-- Lombok Support -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -120,5 +133,16 @@
 
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- ./mvnw test -Pload-test [-Dperf.baseUrl=https://<service>.run.app ...] -->
+		<profile>
+			<id>load-test</id>
+			<properties>
+				<test.groups>load</test.groups>
+				<test.excludedGroups></test.excludedGroups>
+			</properties>
+		</profile>
+	</profiles>
 
 </project>

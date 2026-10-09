@@ -110,11 +110,12 @@ nano backend/cloudrun.env.yaml
 
 ## 6. Run the tests, then deploy the backend to Cloud Run
 
-Run the NFR test suite before every deploy. The Docker build skips tests on purpose, because the
-latency tests are meaningless on a shared build machine.
+Run the NFR test suite before every deploy. `./mvnw test` runs the 18 deterministic tests and
+leaves out the machine-dependent latency test (PERF-2, tagged `load`), so it gives the same result
+on a laptop, in Cloud Shell or in CI. The Docker build skips tests entirely.
 
 ```bash
-(cd backend && ./mvnw -B test)    # skip PERF-2 on weak machines: -Dtest='!PerformanceNfrTest'
+(cd backend && ./mvnw -B test)    # expect: Tests run: 18, Failures: 0 -> BUILD SUCCESS
 
 gcloud run deploy influencehub-api \
   --source backend \
@@ -140,6 +141,32 @@ curl -i $API_URL/api/campaigns                         # expect 401 (auth enforc
 curl -s -X POST $API_URL/api/auth/login -H 'Content-Type: application/json' \
      -d '{"email":"nobody@x.com","password":"x"}'      # expect "Invalid email or password"
 ```
+
+### 6b. Load-test the deployed API (PERF-2: p95 < 200 ms, 100 concurrent users)
+
+This is where the report's latency target should be measured: against the real deployment, not a
+laptop. First register one **brand** and one **influencer** account (through the UI after step 7, or
+with `curl` against `/api/auth/register/...`), then in Cloud Shell:
+
+```bash
+login() {  # prints a JWT (valid 15 minutes)
+  curl -s -X POST "$API_URL/api/auth/login" -H 'Content-Type: application/json' \
+       -d "{\"email\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])'
+}
+BRAND_TOKEN=$(login brand@example.com 'BrandPassword')
+CREATOR_TOKEN=$(login creator@example.com 'CreatorPassword')
+
+(cd backend && ./mvnw -B test -Pload-test -Dperf.baseUrl=$API_URL \
+    -Dperf.brandToken=$BRAND_TOKEN -Dperf.influencerToken=$CREATOR_TOKEN)
+```
+- The test only **reads** (about 2,000 GET requests), so it creates no data and stays well within
+  Cloud Run's free request allowance.
+- Its 3 warm-up rounds absorb the cold start. Run it from Cloud Shell in the same region as the
+  service so you measure the API, not your home internet.
+- Scale the load with `-Dperf.users=50 -Dperf.requestsPerUser=40`. Seed a few campaigns and creators
+  first so the detail endpoints are exercised too.
+- The result (p50/p95/p99, throughput, errors) is the latency number you can quote, e.g. *"p95 = X ms
+  at 100 concurrent users on Cloud Run"*.
 
 ## 7. Deploy the frontend to Firebase Hosting (on your PC)
 

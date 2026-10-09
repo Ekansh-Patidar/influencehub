@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestMethodOrder;
@@ -43,13 +44,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * viewing influencer profiles) must return a response in under 200 ms" and §1.1
  * "System supports scalability for growing users".
  *
- * Load model (scaled down from the report's 1,000 users to what one laptop can generate
- * without the load generator itself becoming the bottleneck):
- *   100 concurrent virtual users x 20 requests each, 50-150 ms think time,
- *   against a seeded dataset of 500 creators, 20 brands, 200 campaigns, 2,000 requests.
+ * PERF-1 (SQL statements per request) and PERF-3 are deterministic and run on every build.
  *
- * Run against the live dev server instead of the in-process one with:
- *   -Dperf.baseUrl=http://localhost:8082 [-Dperf.brandToken=... -Dperf.influencerToken=...]
+ * PERF-2 (p95 latency) is tagged "load": an absolute latency threshold measures the machine as
+ * much as the code (load generator, app and DB share one JVM), so it is NOT part of the default
+ * build. Run it on purpose — ideally against the deployed Cloud Run service:
+ *
+ *   ./mvnw test -Pload-test                                  # in-process, seeded H2 dataset
+ *   ./mvnw test -Pload-test -Dperf.baseUrl=https://<service>.run.app \
+ *        -Dperf.brandToken=<jwt> -Dperf.influencerToken=<jwt>  # live deployment
+ *
+ * Load model: 100 concurrent virtual users x 20 requests (override with -Dperf.users /
+ * -Dperf.requestsPerUser), 50-150 ms think time. In-process it runs against a seeded dataset of
+ * 500 creators, 20 brands, 200 campaigns, 2,000 requests.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "nfr.suite=performance") // own context => own isolated in-memory DB
@@ -58,8 +65,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("NFR-PERF: Performance & scalability")
 class PerformanceNfrTest extends NfrTestSupport {
 
-    static final int VIRTUAL_USERS = 100;
-    static final int REQUESTS_PER_USER = 20;
+    static final int VIRTUAL_USERS = Integer.getInteger("perf.users", 100);
+    static final int REQUESTS_PER_USER = Integer.getInteger("perf.requestsPerUser", 20);
     static final long P95_TARGET_MS = 200;
     static final int MAX_SQL_PER_REQUEST = 10;
 
@@ -90,10 +97,13 @@ class PerformanceNfrTest extends NfrTestSupport {
         if (LIVE_URL != null) {
             brandToken = System.getProperty("perf.brandToken");
             influencerToken = System.getProperty("perf.influencerToken");
-            String tok = brandToken != null ? brandToken : influencerToken;
-            get("/api/campaigns?size=50", tok).json().path("campaigns")
-                    .forEach(c -> campaignIds.add(c.get("id").asLong()));
-            get("/api/creators?size=50", tok).json().path("creators")
+            // Every endpoint requires a JWT, so live mode needs one token per role (valid 15 min).
+            assertThat(brandToken).as("live mode needs -Dperf.brandToken=<JWT of a brand account>").isNotBlank();
+            assertThat(influencerToken).as("live mode needs -Dperf.influencerToken=<JWT of an influencer account>").isNotBlank();
+            Resp campaigns = get("/api/campaigns?size=50", influencerToken);
+            assertThat(campaigns.status()).as("GET /api/campaigns on " + LIVE_URL + " (token expired?)").isEqualTo(200);
+            campaigns.json().path("campaigns").forEach(c -> campaignIds.add(c.get("id").asLong()));
+            get("/api/creators?size=50", brandToken).json().path("creators")
                     .forEach(c -> creatorProfileIds.add(c.get("id").asLong()));
             return;
         }
@@ -186,8 +196,9 @@ class PerformanceNfrTest extends NfrTestSupport {
 
         Map<String, Runnable> mix = new LinkedHashMap<>();
         ops.forEach((name, spec) -> {
-            // live mode without tokens: only the anonymous-readable endpoints can be exercised
-            if (spec[1] == null && (name.contains("/brand/") || name.contains("/influencer/"))) return;
+            // A fresh live deployment may have no campaigns/creators yet: skip the detail lookups.
+            if (name.equals("GET /api/campaigns/{id}") && campaignIds.isEmpty()) return;
+            if (name.equals("GET /api/creators/{id}") && creatorProfileIds.isEmpty()) return;
             mix.put(name, () -> {
                 String path = spec[0];
                 if (name.equals("GET /api/campaigns/{id}"))
@@ -238,6 +249,7 @@ class PerformanceNfrTest extends NfrTestSupport {
 
     // ── PERF-2 ───────────────────────────────────────────────────────────────
     @Test
+    @Tag("load")
     @Order(2)
     @DisplayName("PERF-2: p95 latency of read operations < 200 ms with 100 concurrent users")
     void readLatencyP95Under200msWith100ConcurrentUsers() throws Exception {

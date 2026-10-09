@@ -45,16 +45,16 @@ influencehub/
 cd influencehub/backend
 ```
 
-### 2. Configure Database
+### 2. Configure Database & secrets
 
-Update `application.properties`:
+Non-secret settings have localhost defaults in `application.properties` (DB `jdbc:mysql://localhost:3306/influencehub`, user `root`, port `8082`) and can be overridden with environment variables (`DB_URL`, `DB_USER`, `PORT`, ...).
 
+Secrets go in a git-ignored file:
 ```
-spring.datasource.url=jdbc:mysql://localhost:3306/influencehub
-spring.datasource.username=YOUR_USERNAME
-spring.datasource.password=YOUR_PASSWORD
-spring.jpa.hibernate.ddl-auto=update
+cp secrets.properties.example secrets.properties
+# then set spring.datasource.password and jwt.secret
 ```
+Run the backend from the `backend/` folder so this file is found.
 
 ### 3. Run Backend
 ```
@@ -62,7 +62,7 @@ spring.jpa.hibernate.ddl-auto=update
 ```
 
 Backend runs at:
-http://localhost:8080
+http://localhost:8082
 
 ---
 
@@ -79,8 +79,9 @@ npm install
 ```
 
 ### 3. Configure environment
+`.env` already points to the local backend:
 ```
-VITE_API_BASE_URL=http://localhost:8080
+VITE_API_URL=http://localhost:8082
 ```
 
 ### 4. Run frontend
@@ -117,6 +118,21 @@ http://localhost:5173
 - N-Tier Monolithic Architecture  
 - Controller → Service → Repository  
 - REST API communication  
+
+---
+
+## 🧪 Non-Functional Requirement Tests
+
+Security, data-consistency and performance tests: see [NFR_TESTING.md](NFR_TESTING.md).
+```
+cd backend && ./mvnw test
+```
+
+---
+
+## ☁️ Deployment
+
+GCP Cloud Run + Firebase Hosting + a free managed MySQL: see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 
